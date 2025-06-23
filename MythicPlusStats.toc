@@ -1,0 +1,11 @@
+## Interface: 110107
+## Title: MythicPlusStats
+## Notes: Provides per-dungeon, per-key level splits stats for Mythic+ Dungeons.
+## Author: Xephyris
+## Version: 1.0.0
+## DefaultState: Enabled
+## SavedVariables: MythicPlusStatsDB
+## IconTexture: 4352494
+## Category: Dungeons & Raids
+
+Init.lua
