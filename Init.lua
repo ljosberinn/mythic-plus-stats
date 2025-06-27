@@ -145,14 +145,12 @@ local function FindComparableRuns(mapId, level, requiredCount, timer)
 	local history = MythicPlusStatsDB.runsById[mapId]
 
 	if not history then
-		Log("warning", string.format("No history found for map %d", mapId))
 		return
 	end
 
 	local forThisLevel = history[level]
 
 	if not forThisLevel then
-		Log("warning", string.format("No history found for map %d and level %d", mapId, level))
 		return
 	end
 
@@ -171,44 +169,14 @@ local function FindComparableRuns(mapId, level, requiredCount, timer)
 	end
 
 	if relevantRuns == nil or keyState == nil then
-		Log("warning", "no relevant runs found")
 		return
 	end
-
-	Log("warning", string.format("found %d relevant runs using keyState %s", #relevantRuns, keyState))
 
 	---@type MythicPlusStatsEntry[]
 	local copy = {}
 	for _, run in ipairs(relevantRuns) do
 		if #run.encounters > 0 and requiredCount == run.countRequired and timer == run.timer then
 			table.insert(copy, run)
-		else
-			local timestamp = C_DateAndTime.GetCalendarTimeFromEpoch(run.startTime * 1000 * 1000)
-			local lines = {}
-			table.insert(
-				lines,
-				string.format(
-					"ignoring run from %d-%d-%d because:",
-					timestamp.year,
-					timestamp.month,
-					timestamp.monthDay
-				)
-			)
-			if requiredCount ~= run.countRequired then
-				table.insert(
-					lines,
-					string.format("-- count required was %d but now is %d", run.countRequired, requiredCount)
-				)
-			end
-			if timer ~= run.timer then
-				table.insert(lines, string.format("-- timer was %d but now is %d", run.timer, timer))
-			end
-
-			if #run.encounters == 0 then
-				table.insert(lines, "-- no encounters recorded")
-			end
-
-			Log("warning", table.concat(lines, "\n"))
 		end
 	end
 
@@ -309,7 +277,7 @@ local function GetEncounterComparisonLines(
 	isEncounterEnd
 )
 	local lines = {
-		string.format("Previous best for %s %s:", isEncounterEnd and "finishing" or "starting", encounterName),
+		string.format("Previous best for %s %s:", isEncounterEnd and "finishing" or "pulling", encounterName),
 	}
 
 	local previousDiff = 0
@@ -392,7 +360,7 @@ local function GetEncounterComparisonLines(
 		table.insert(
 			lines,
 			string.format(
-				"-- total kill count across key levels: %d",
+				"-- total kills across all key levels: %d",
 				GetTotalKillCountForEncounterId(mapId, currentEncounter.id)
 			)
 		)
@@ -400,7 +368,7 @@ local function GetEncounterComparisonLines(
 		table.insert(
 			lines,
 			string.format(
-				"-- total pull count across key levels: %d",
+				"-- total pulls across key levels: %d",
 				GetTotalPullCountForEncounterId(mapId, currentEncounter.id)
 			)
 		)
@@ -547,7 +515,9 @@ frame:SetScript(
 								fingerprint = inProgressRun.fingerprint,
 							}
 
-							if runData.countReached > 0 or #runData.encounters > 0 then
+							local hasAnyProgress = runData.countReached > 0 or #runData.encounters > 0
+
+							if hasAnyProgress then
 								table.insert(MythicPlusStatsDB.runsById[map][level].abandoned, runData)
 
 								Log("info", "Run abandoned.")
@@ -557,7 +527,9 @@ frame:SetScript(
 
 							inProgressRun = GetDefaultPendingEntry()
 
-							Log("info", table.concat(GetStatLinesForMapAndLevel(map, level), "\n"))
+							if hasAnyProgress then
+								Log("info", table.concat(GetStatLinesForMapAndLevel(map, level), "\n"))
+							end
 
 							abandonedKeyTimer = nil
 						end)
@@ -601,8 +573,6 @@ frame:SetScript(
 
 			table.insert(inProgressRun.encounters, entry)
 
-			Log("info", string.format("Saw %s for %d", event, encounterId))
-
 			local relevantRuns, runKeyState = FindComparableRuns(
 				inProgressRun.mapId,
 				inProgressRun.level,
@@ -611,7 +581,6 @@ frame:SetScript(
 			)
 
 			if relevantRuns == nil or runKeyState == nil then
-				Log("warning", "Couldn't find any relevant runs for this encounter.")
 				return
 			end
 
@@ -694,21 +663,10 @@ frame:SetScript(
 					return
 				end
 			end
-
-			Log(
-				"warning",
-				string.format(
-					"Saw %s for %s (%d) but couldn't find a matching ENCOUNTER_START",
-					event,
-					encounterName,
-					success and "Kill" or "Wipe/Reset"
-				)
-			)
 		elseif event == "CHALLENGE_MODE_START" then
 			local mapId = C_ChallengeMode.GetActiveChallengeMapID()
 
 			if mapId == nil then
-				Log("warning", "Saw CHALLENGE_MODE_START but couldn't find a map id.")
 				return
 			end
 
@@ -723,17 +681,6 @@ frame:SetScript(
 			MythicPlusStatsDB.runsById[mapId][level].timed = MythicPlusStatsDB.runsById[mapId][level].timed or {}
 
 			if abandonedKeyTimer ~= nil and mapId == inProgressRun.mapId and level == inProgressRun.level then
-				local name = C_ChallengeMode.GetMapUIInfo(mapId)
-
-				Log(
-					"info",
-					string.format(
-						"Encountered %s for %s +%d while abandoned key timer is active, ignoring.",
-						event,
-						name,
-						level
-					)
-				)
 				return
 			end
 
@@ -777,10 +724,10 @@ frame:SetScript(
 				Log(
 					"error",
 					string.format(
-						"Saw %s but the event map id %d doesn't match the most recently started run of map id %d. This indicates partial info, so we're discarding this.",
+						"Saw %s but '%s' doesn't match the most recently started key '%s'. This indicates partial info, so we're discarding this.",
 						event,
-						info.mapChallengeModeID,
-						inProgressRun.mapId
+						select(1, C_ChallengeMode.GetMapUIInfo(info.mapChallengeModeID)),
+						select(1, C_ChallengeMode.GetMapUIInfo(inProgressRun.mapId))
 					)
 				)
 				return
@@ -790,7 +737,7 @@ frame:SetScript(
 				Log(
 					"error",
 					string.format(
-						"Saw %s but the keystone level %d doesn't match the most recently started run at level %d. This indicates partial info, so we're discarding this.",
+						"Saw %s but the keystone level %d doesn't match the most recently started key of level %d. This indicates partial info, so we're discarding this.",
 						event,
 						info.level,
 						inProgressRun.level
