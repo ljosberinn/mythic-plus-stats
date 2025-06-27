@@ -102,7 +102,7 @@ local function GetPartyMemberInfo(unit)
 		name = name,
 		realm = realm or GetRealmName(),
 		guid = UnitGUID(unit) or "unknown",
-		class = UnitClass(unit),
+		classId = select(3, UnitClass(unit)),
 	}
 end
 
@@ -110,28 +110,19 @@ end
 local function CreatePartyFingerprint()
 	local members = {}
 
-	if UnitInParty("player") then
-		for i = 1, 5 do
-			local info = GetPartyMemberInfo("party" .. i)
+	local playerInfo = GetPartyMemberInfo("player")
 
-			if info then
-				table.insert(members, info)
-			end
-		end
-	else
-		local info = GetPartyMemberInfo("player")
+	if playerInfo then
+		table.insert(members, playerInfo)
+	end
+
+	for i = 1, 4 do
+		local info = GetPartyMemberInfo("party" .. i)
 
 		if info then
 			table.insert(members, info)
 		end
 	end
-
-	table.sort(members, function(a, b)
-		if a.name == b.name then
-			return a.realm < b.realm
-		end
-		return a.name < b.name
-	end)
 
 	return C_EncodingUtil.SerializeJSON(members)
 end
