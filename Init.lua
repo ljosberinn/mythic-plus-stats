@@ -30,7 +30,6 @@ local AddOnName, Private = ...
 EventUtil.ContinueOnAddOnLoaded(AddOnName, function()
 	---@type MythicPlusStatsDB
 	MythicPlusStatsDB = MythicPlusStatsDB or {}
-
 	MythicPlusStatsDB.runsById = MythicPlusStatsDB.runsById or {}
 end)
 
@@ -76,6 +75,7 @@ end
 ---@param time number
 ---@return string
 local function FormatToMinutes(time)
+	Log("info", "FormatToMinutes: " .. time)
 	if time < 60 then
 		return string.format("00:%02d", time)
 	end
@@ -83,39 +83,57 @@ local function FormatToMinutes(time)
 	return string.format("%02d:%02d", math.floor(time / 60), time % 60)
 end
 
+---@class PartyMemberInfo
+---@field name string
+---@field realm string
+---@field guid string
+---@field class string
+
+---@param unit string
+---@return PartyMemberInfo?
+local function GetPartyMemberInfo(unit)
+	if not UnitExists(unit) then
+		return
+	end
+
+	local name, realm = UnitName(unit)
+
+	return {
+		name = name,
+		realm = realm or GetRealmName(),
+		guid = UnitGUID(unit) or "unknown",
+		class = UnitClass(unit),
+	}
+end
+
 ---@return string
 local function CreatePartyFingerprint()
-	local partyMembers = {}
+	local members = {}
 
 	if UnitInParty("player") then
 		for i = 1, 5 do
-			local unit = "party" .. i
+			local info = GetPartyMemberInfo("party" .. i)
 
-			if UnitExists(unit) then
-				local name, realm = UnitName("party" .. i)
-				local class = UnitClass("party" .. i)
-
-				if not realm then
-					realm = GetRealmName()
-				end
-
-				table.insert(partyMembers, string.format("%s-%s, %s", name, realm, class))
+			if info then
+				table.insert(members, info)
 			end
 		end
 	else
-		local name, realm = UnitName("player")
-		local class = UnitClass("player")
+		local info = GetPartyMemberInfo("player")
 
-		if not realm then
-			realm = GetRealmName()
+		if info then
+			table.insert(members, info)
 		end
-
-		table.insert(partyMembers, string.format("%s-%s, %s", name, realm, class))
 	end
 
-	table.sort(partyMembers)
+	table.sort(members, function(a, b)
+		if a.name == b.name then
+			return a.realm < b.realm
+		end
+		return a.name < b.name
+	end)
 
-	return table.concat(partyMembers, "|")
+	return C_EncodingUtil.SerializeJSON(members)
 end
 
 ---@param mapId number
@@ -165,9 +183,17 @@ local function FindComparableRuns(mapId, level, requiredCount, timer)
 		if #run.encounters > 0 and requiredCount == run.countRequired and timer == run.timer then
 			table.insert(copy, run)
 		else
-			local timestamp = C_DateAndTime.GetCalendarTimeFromEpoch(run.startTime)
+			local timestamp = C_DateAndTime.GetCalendarTimeFromEpoch(run.startTime * 1000 * 1000)
 			local lines = {}
-			table.insert(lines, string.format("ignoring run from %s because:", timestamp))
+			table.insert(
+				lines,
+				string.format(
+					"ignoring run from %d-%d-%d because:",
+					timestamp.year,
+					timestamp.month,
+					timestamp.monthDay
+				)
+			)
 			if requiredCount ~= run.countRequired then
 				table.insert(
 					lines,
@@ -282,12 +308,9 @@ local function GetEncounterComparisonLines(
 	previousEncounter,
 	isEncounterEnd
 )
-	local lines = {}
-
-	table.insert(
-		lines,
-		string.format("Previous best for %s %s:", isEncounterEnd and "finishing" or "starting", encounterName)
-	)
+	local lines = {
+		string.format("Previous best for %s %s:", isEncounterEnd and "finishing" or "starting", encounterName),
+	}
 
 	local previousDiff = 0
 	local currentDiff = 0
@@ -318,12 +341,12 @@ local function GetEncounterComparisonLines(
 	local currentCount = isEncounterEnd and currentEncounter.endCount or currentEncounter.startCount
 
 	if previousCount == currentCount then
-		table.insert(lines, string.format("-- you have the same count (%d).", currentEncounter.endCount))
+		table.insert(lines, string.format("-- you have the same count of %d.", currentEncounter.endCount))
 	elseif previousCount > currentCount then
 		table.insert(
 			lines,
 			string.format(
-				"-- you have %d more count (%d current, %d before).",
+				"-- you have %d less count (%d current, %d before).",
 				previousCount - currentCount,
 				currentCount,
 				previousCount
@@ -333,7 +356,7 @@ local function GetEncounterComparisonLines(
 		table.insert(
 			lines,
 			string.format(
-				"-- you have %d less count (%d current, %d before).",
+				"-- you have %d more count (%d current, %d before).",
 				currentCount - previousCount,
 				currentCount,
 				previousCount
@@ -352,7 +375,7 @@ local function GetEncounterComparisonLines(
 		end
 	end
 
-	local date = C_DateAndTime.GetCalendarTimeFromEpoch(previousRun.startTime)
+	local date = C_DateAndTime.GetCalendarTimeFromEpoch(previousRun.startTime * 1000 * 1000)
 
 	table.insert(
 		lines,
@@ -421,14 +444,13 @@ local function GetStatLinesForMapAndLevel(mapId, keyLevel)
 
 	local name = C_ChallengeMode.GetMapUIInfo(mapId)
 
-	local lines = {}
-	table.insert(lines, string.format("Stats for %s:", name))
-	table.insert(lines, string.format("%d total", stats.total))
-	table.insert(lines, string.format("%d abandoned (%.1f%%)", stats.abandoned, (stats.abandoned / stats.total) * 100))
-	table.insert(lines, string.format("%d completed (%.1f%%)", stats.completed, (stats.completed / stats.total) * 100))
-	table.insert(lines, string.format("%d timed (%.1f%%)", stats.timed, (stats.timed / stats.total) * 100))
-
-	return lines
+	return {
+		keyLevel and string.format("Stats for %s +%d:", name, keyLevel) or string.format("Stats for %s:", name),
+		string.format("%d total", stats.total),
+		string.format("%d abandoned (%.1f%%)", stats.abandoned, (stats.abandoned / stats.total) * 100),
+		string.format("%d completed (%.1f%%)", stats.completed, (stats.completed / stats.total) * 100),
+		string.format("%d timed (%.1f%%)", stats.timed, (stats.timed / stats.total) * 100),
+	}
 end
 
 local inProgressRun = GetDefaultPendingEntry()
@@ -526,10 +548,7 @@ frame:SetScript(
 							}
 
 							if runData.countReached > 0 or #runData.encounters > 0 then
-								table.insert(
-									MythicPlusStatsDB.runsById[inProgressRun.mapId][inProgressRun.level].abandoned,
-									runData
-								)
+								table.insert(MythicPlusStatsDB.runsById[map][level].abandoned, runData)
 
 								Log("info", "Run abandoned.")
 							else
@@ -697,9 +716,11 @@ frame:SetScript(
 
 			MythicPlusStatsDB.runsById[mapId] = MythicPlusStatsDB.runsById[mapId] or {}
 			MythicPlusStatsDB.runsById[mapId][level] = MythicPlusStatsDB.runsById[mapId][level] or {}
-			MythicPlusStatsDB.runsById[mapId][level].timed = {}
-			MythicPlusStatsDB.runsById[mapId][level].completed = {}
-			MythicPlusStatsDB.runsById[mapId][level].abandoned = {}
+			MythicPlusStatsDB.runsById[mapId][level].completed = MythicPlusStatsDB.runsById[mapId][level].completed
+				or {}
+			MythicPlusStatsDB.runsById[mapId][level].abandoned = MythicPlusStatsDB.runsById[mapId][level].abandoned
+				or {}
+			MythicPlusStatsDB.runsById[mapId][level].timed = MythicPlusStatsDB.runsById[mapId][level].timed or {}
 
 			if abandonedKeyTimer ~= nil and mapId == inProgressRun.mapId and level == inProgressRun.level then
 				local name = C_ChallengeMode.GetMapUIInfo(mapId)
