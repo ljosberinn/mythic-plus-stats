@@ -271,29 +271,64 @@ local function GetEncounterComparisonLines(
 		string.format("Previous best for %s %s:", isEncounterEnd and "finishing" or "pulling", encounterName),
 	}
 
-	local previousDiff = 0
-	local currentDiff = 0
+	-- general dungeon timing
+	do
+		local previousDiff = 0
+		local currentDiff = 0
 
-	if isEncounterEnd then
-		previousDiff = (previousEncounter.endTime + previousEncounter.endLossOffset)
-			- (previousEncounter.startTime + previousEncounter.startLossOffset)
-		currentDiff = (currentEncounter.endTime + currentEncounter.endLossOffset)
-			- (currentEncounter.startTime + currentEncounter.startLossOffset)
-	else
-		previousDiff = (previousEncounter.startTime + previousEncounter.startLossOffset) - previousRun.startTime
-		currentDiff = (currentEncounter.startTime + currentEncounter.startLossOffset) - currentRun.startTime
+		if isEncounterEnd then
+			previousDiff = (previousEncounter.endTime + previousEncounter.endLossOffset) - previousRun.startTime
+			currentDiff = (currentEncounter.endTime + currentEncounter.endLossOffset) - currentRun.startTime
+		else
+			previousDiff = (previousEncounter.startTime + previousEncounter.startLossOffset) - previousRun.startTime
+			currentDiff = (currentEncounter.startTime + currentEncounter.startLossOffset) - currentRun.startTime
+		end
+
+		if previousDiff == currentDiff then
+			if isEncounterEnd then
+				table.insert(lines, "-- you finished at the same time.")
+			else
+				table.insert(lines, "-- you pulled at the same time.")
+			end
+		elseif previousDiff > currentDiff then
+			table.insert(
+				lines,
+				string.format("-- you engaged this encounter %s faster.", FormatToMinutes(previousDiff - currentDiff))
+			)
+		else
+			table.insert(
+				lines,
+				string.format("-- you engaged this encounter %s slower.", FormatToMinutes(currentDiff - previousDiff))
+			)
+		end
 	end
 
-	if previousDiff == currentDiff then
+	-- encounter specific timing
+	do
+		local previousDiff = 0
+		local currentDiff = 0
+
 		if isEncounterEnd then
-			table.insert(lines, "-- encounter duration identical.")
+			previousDiff = (previousEncounter.endTime + previousEncounter.endLossOffset)
+				- (previousEncounter.startTime + previousEncounter.startLossOffset)
+			currentDiff = (currentEncounter.endTime + currentEncounter.endLossOffset)
+				- (currentEncounter.startTime + currentEncounter.startLossOffset)
 		else
-			table.insert(lines, "-- you pulled at the same second.")
+			previousDiff = (previousEncounter.startTime + previousEncounter.startLossOffset) - previousRun.startTime
+			currentDiff = (currentEncounter.startTime + currentEncounter.startLossOffset) - currentRun.startTime
 		end
-	elseif previousDiff > currentDiff then
-		table.insert(lines, string.format("-- you are %s faster.", FormatToMinutes(previousDiff - currentDiff)))
-	else
-		table.insert(lines, string.format("-- you are %s slower.", FormatToMinutes(currentDiff - previousDiff)))
+
+		if previousDiff == currentDiff then
+			if isEncounterEnd then
+				table.insert(lines, "-- encounter duration identical.")
+			else
+				table.insert(lines, "-- you pulled at the same second.")
+			end
+		elseif previousDiff > currentDiff then
+			table.insert(lines, string.format("-- you are %s faster.", FormatToMinutes(previousDiff - currentDiff)))
+		else
+			table.insert(lines, string.format("-- you are %s slower.", FormatToMinutes(currentDiff - previousDiff)))
+		end
 	end
 
 	local previousCount = isEncounterEnd and previousEncounter.endCount or previousEncounter.startCount
@@ -419,6 +454,44 @@ local abandonedKeyTimer = nil
 ---@type FunctionContainer|nil
 local activityTimer = nil
 
+local function AbandonInProgressRun()
+	local map = inProgressRun.mapId
+	local level = inProgressRun.level
+
+	---@type MythicPlusStatsEntry
+	local runData = {
+		countRequired = inProgressRun.countRequired,
+		countReached = inProgressRun.countReached,
+		encounters = inProgressRun.encounters,
+		deaths = inProgressRun.deaths,
+		mapId = map,
+		timeLoss = inProgressRun.timeLoss,
+		level = level,
+		completionTime = 0,
+		startTime = inProgressRun.startTime,
+		timer = inProgressRun.timer,
+		fingerprint = inProgressRun.fingerprint,
+	}
+
+	local hasAnyProgress = runData.countReached > 0 or #runData.encounters > 0
+
+	if hasAnyProgress then
+		table.insert(MythicPlusStatsDB.runsById[map][level].abandoned, runData)
+
+		Log("info", "Run abandoned.")
+	else
+		Log("info", "Ignoring run as count was 0 and no encounter was engaged.")
+	end
+
+	inProgressRun = GetDefaultPendingEntry()
+
+	if hasAnyProgress then
+		Log("info", table.concat(GetStatLinesForMapAndLevel(map, level), "\n"))
+	end
+
+	abandonedKeyTimer = nil
+end
+
 local frame = CreateFrame("Frame", "MythicPlusStatsListenerFrame", UIParent)
 frame:Hide()
 frame:SetScript(
@@ -441,6 +514,7 @@ frame:SetScript(
 						or difficultyId == DifficultyUtil.ID.DungeonChallenge
 					)
 
+				---@type WowEvent[]
 				local eventsToRegister = {
 					"ENCOUNTER_START",
 					"ENCOUNTER_END",
@@ -487,43 +561,7 @@ frame:SetScript(
 							)
 						end
 
-						abandonedKeyTimer = C_Timer.NewTimer(abandonmentThreshold, function()
-							local map = inProgressRun.mapId
-							local level = inProgressRun.level
-
-							---@type MythicPlusStatsEntry
-							local runData = {
-								countRequired = inProgressRun.countRequired,
-								countReached = inProgressRun.countReached,
-								encounters = inProgressRun.encounters,
-								deaths = inProgressRun.deaths,
-								mapId = map,
-								timeLoss = inProgressRun.timeLoss,
-								level = level,
-								completionTime = 0,
-								startTime = inProgressRun.startTime,
-								timer = inProgressRun.timer,
-								fingerprint = inProgressRun.fingerprint,
-							}
-
-							local hasAnyProgress = runData.countReached > 0 or #runData.encounters > 0
-
-							if hasAnyProgress then
-								table.insert(MythicPlusStatsDB.runsById[map][level].abandoned, runData)
-
-								Log("info", "Run abandoned.")
-							else
-								Log("info", "Ignoring run as count was 0 and no encounter was engaged.")
-							end
-
-							inProgressRun = GetDefaultPendingEntry()
-
-							if hasAnyProgress then
-								Log("info", table.concat(GetStatLinesForMapAndLevel(map, level), "\n"))
-							end
-
-							abandonedKeyTimer = nil
-						end)
+						abandonedKeyTimer = C_Timer.NewTimer(abandonmentThreshold, AbandonInProgressRun)
 
 						return
 					end
@@ -547,6 +585,14 @@ frame:SetScript(
 					end
 				end
 			end)
+		elseif event == "PLAYER_LOGOUT" then
+			if abandonedKeyTimer == nil then
+				return
+			end
+
+			AbandonInProgressRun()
+			abandonedKeyTimer:Cancel()
+			abandonedKeyTimer = nil
 		elseif event == "ENCOUNTER_START" then
 			local encounterId, encounterName = ...
 
@@ -810,3 +856,4 @@ frame:SetScript(
 )
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 frame:RegisterEvent("LOADING_SCREEN_DISABLED")
+frame:RegisterEvent("PLAYER_LOGOUT")
